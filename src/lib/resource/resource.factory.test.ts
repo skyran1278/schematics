@@ -1111,8 +1111,9 @@ import { ValidatorValidationError } from '@app/graphql-type/error/validator-vali
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { validate } from 'class-validator';
-import { Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 
+import { ServiceMetadata } from '../common/service-metadata.interface';
 import { UserArgs } from './args/user.args';
 import { CreateUserInput } from './input/create-user.input';
 import { UpdateUserInput } from './input/update-user.input';
@@ -1123,44 +1124,59 @@ import { UpdateUserOutput } from './output/update-user.output';
 @Injectable()
 export class UserService {
   constructor(
+    private readonly dataSource: DataSource,
     @InjectRepository(User)
-    private readonly userRepository: Repository<User>,
+    private readonly userRepo: Repository<User>,
   ) {}
 
   async createUser(
     input: CreateUserInput,
+    metadata?: Pick<ServiceMetadata, 'manager'>,
   ): Promise<CreateUserOutput> {
-    const dao = this.userRepository.create(input);
-    const errors = await validate(dao);
-    if (errors.length) {
-      throw new ValidatorValidationError(errors);
+    const create = async (manager: EntityManager) => {
+      const userRepo = manager.getRepository(User);
+
+      const user = userRepo.create(input);
+
+      const errors = await validate(user);
+      if (errors.length) {
+        throw new ValidatorValidationError(errors);
+      }
+
+      await userRepo.save(
+        user,
+      );
+
+      return { user };
+    };
+
+    if (metadata?.manager) {
+      return create(metadata.manager);
     }
-    const user = await this.userRepository.save(
-      dao,
-    );
-    return { user };
+
+    return this.dataSource.transaction('READ COMMITTED', create);
   }
 
   async findByUserArgs(
     args: UserArgs,
   ): Promise<User[]> {
-    return this.userRepository.findBy(args);
+    return this.userRepo.findBy(args);
   }
 
   async findById(id: string): Promise<User | null> {
-    return this.userRepository.findOneBy({ id });
+    return this.userRepo.findOneBy({ id });
   }
 
   async updateUser(
     id: string,
     input: UpdateUserInput,
   ): Promise<UpdateUserOutput> {
-    const dao = this.userRepository.create(input);
+    const dao = this.userRepo.create(input);
     const errors = await validate(dao);
     if (errors.length) {
       throw new ValidatorValidationError(errors);
     }
-    const result = await this.userRepository.update(
+    const result = await this.userRepo.update(
       id,
       input,
     );
@@ -1171,7 +1187,7 @@ export class UserService {
   }
 
   async removeUser(id: string): Promise<RemoveUserOutput> {
-    const result = await this.userRepository.softDelete({
+    const result = await this.userRepo.softDelete({
       id,
     });
 
